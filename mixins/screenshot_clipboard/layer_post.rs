@@ -18,16 +18,17 @@ fn screenshot_clipboard_layer_post(
     };
 
     let is_ru = game.settings.language.starts_with("ru");
-    let text = if is_ru {
-        "Скриншот сохранён в буфер обмена"
+    let (line1, line2) = if is_ru {
+        ("Скриншот сохранён", "в буфер обмена")
     } else {
-        "Screenshot saved to clipboard"
+        ("Screenshot saved", "to clipboard")
     };
 
-    let text_w = game.native_text_width(text);
-    let pad_x = 8.0;
-    let box_w = (text_w + pad_x * 2.0 + 6.0).ceil();
-    let box_h = 16.0;
+    let text_w1 = game.native_text_width(line1);
+    let text_w2 = game.native_text_width(line2);
+    let text_w = text_w1.max(text_w2);
+    let box_w = (text_w + 16.0).ceil();
+    let box_h = 25.0;
 
     let screen_w = batch.width;
     let screen_h = batch.height;
@@ -96,8 +97,10 @@ fn screenshot_clipboard_layer_post(
         make_argb(0xFF, 0x38BDF8),
     );
 
-    // 7. Text in Minecraft font with drop shadow
-    let text_x = x + pad_x + 3.0;
-    let text_y = y + 4.0;
-    game.native_text(batch, text, [text_x, text_y], 0xFFFFFF, true);
+    // 7. Two lines of text in Minecraft font with drop shadow
+    let text_x = x + 8.0;
+    let text_y1 = y + 4.0;
+    let text_y2 = y + 14.0;
+    game.native_text(batch, line1, [text_x, text_y1], 0xFFFFFF, true);
+    game.native_text(batch, line2, [text_x, text_y2], 0xFFFFFF, true);
 }
