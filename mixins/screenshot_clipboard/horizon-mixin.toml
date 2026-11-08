@@ -59,3 +59,14 @@ helper = "finish.rs"
 bindings = [
   { name = "content", ty = "&horizon_client_core::text::Text", value = "&content" },
 ]
+
+[[injection]]
+id = "layer_post"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_gui_layer_post"
+helper = "layer_post.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "layer", ty = "&str", value = "layer" },
+  { name = "batch", ty = "&mut crate::hud::HudBatch", value = "&mut *batch" },
+]

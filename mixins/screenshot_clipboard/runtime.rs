@@ -20,6 +20,43 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// occur rapidly, only the latest successfully completed capture wins in clipboard.
 static LATEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Toast display duration in milliseconds (3.0 seconds).
+pub const TOAST_DURATION_MS: u64 = 3000;
+/// Toast fade-out duration in milliseconds (0.5 seconds).
+pub const TOAST_FADE_MS: u64 = 500;
+
+/// Timestamp in milliseconds when the active toast expires.
+static TOAST_EXPIRY: AtomicU64 = AtomicU64::new(0);
+
+/// Returns current wall-clock timestamp in milliseconds.
+pub fn current_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Triggers or refreshes the in-game Minecraft toast banner.
+pub fn trigger_toast() {
+    let now = current_timestamp_ms();
+    TOAST_EXPIRY.store(now.saturating_add(TOAST_DURATION_MS), Ordering::SeqCst);
+}
+
+/// Computes current toast opacity (alpha between 0.0 and 1.0), or None if expired.
+pub fn toast_alpha() -> Option<f32> {
+    let expiry = TOAST_EXPIRY.load(Ordering::Relaxed);
+    let now = current_timestamp_ms();
+    if now >= expiry {
+        return None;
+    }
+    let remaining = expiry.saturating_sub(now);
+    if remaining <= TOAST_FADE_MS {
+        Some((remaining as f32 / TOAST_FADE_MS as f32).clamp(0.0, 1.0))
+    } else {
+        Some(1.0)
+    }
+}
+
 /// Check if mod is enabled, loading default from persistence closure if uninitialized.
 pub fn is_enabled(read_persisted: impl FnOnce() -> Option<bool>) -> bool {
     if !INITIALIZED.load(Ordering::Relaxed) {
@@ -341,6 +378,7 @@ pub fn handle_screenshot_path(path_str: &str) {
     if !ENABLED.load(Ordering::SeqCst) {
         return;
     }
+    trigger_toast();
     let path = PathBuf::from(path_str);
     let seq = next_seq();
     std::thread::Builder::new()
@@ -368,6 +406,21 @@ pub fn handle_screenshot_path(path_str: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_toast_trigger_and_decay() {
+        // Reset expiry
+        TOAST_EXPIRY.store(0, Ordering::SeqCst);
+        assert!(toast_alpha().is_none());
+
+        trigger_toast();
+        let alpha = toast_alpha().expect("toast should be active");
+        assert!(alpha > 0.0 && alpha <= 1.0);
+
+        // Manually simulate expiration
+        TOAST_EXPIRY.store(1, Ordering::SeqCst);
+        assert!(toast_alpha().is_none());
+    }
 
     #[test]
     fn test_settings_toggle() {

@@ -14,6 +14,10 @@ A high-performance native Horizon mod for **Minecraft 26.3** that automatically 
 - **Instant System Clipboard Integration:**
   - Pressing `F2` (or your configured screenshot key) saves the image to disk as usual and immediately copies the pixel data into the Windows clipboard.
   - Paste directly (`Ctrl+V`) into Discord, Telegram, Slack, MS Paint, Photoshop, browsers, or documents without opening the screenshots folder.
+- **In-Game Pixelated Minecraft Toast Banner:**
+  - Displays a clean pixelated blue/gray banner with text (*"Скриншот сохранён в буфер обмена"* / *"Screenshot saved to clipboard"*) at the bottom of the screen right above the hotbar.
+  - Styled with classic 3D Minecraft bevel highlights, subtle dark border, diamond-cyan accent pip, and drop-shadow text.
+  - Stays visible for 3 seconds with smooth fade-out.
 - **Dual Native Clipboard Formats:**
   - **`CF_DIB` (Device Independent Bitmap):** Universal compatibility with native Windows applications (MS Paint, Office suite, classic image tools).
   - **`"PNG"` Registered Format:** Preferred by modern messengers and browsers (Discord, Telegram, Chrome/Firefox), preserving original quality.
@@ -40,9 +44,10 @@ Screenshot Clipboard integrates into Horizon via native mixins without modifying
 | Injection Target | Type | Purpose |
 |------------------|------|---------|
 | `horizon_client_render::chat::Chat::add` | `HEAD` | Intercepts screenshot completion text (`ClickEvent::OpenFile`), extracts file path, and dispatches asynchronous clipboard copy. |
-| `horizon_client::gui::screen::mods::NativeMods::list` | `HEAD` | Registers `screenshot_clipboard` (v0.1.0) into Horizon's active mod list. |
-| `horizon_client::gui::screen::mods::NativeMods::settings` | `HEAD` | Renders the `Screenshot Clipboard: ON / OFF` button in Options → Mods. |
-| `horizon_client::gui::screen::mods::NativeMods::click` | `HEAD` | Toggles mod state on click and persists user preference. |
+| `horizon_client::game::native_hooks::Game<'_>::native_gui_layer_post` | `HEAD` | Renders the Minecraft-style pixelated blue/gray bottom toast notification when active. |
+| `horizon_client::game::native_hooks::Game<'_>::native_mods` | `HEAD` | Registers `screenshot_clipboard` (v0.1.0) into Horizon's active mod list. |
+| `horizon_client::game::native_hooks::Game<'_>::native_settings` | `HEAD` | Renders the `Screenshot Clipboard: ON / OFF` button in Options → Mods. |
+| `horizon_client::game::native_hooks::Game<'_>::native_settings_click` | `HEAD` | Toggles mod state on click and persists user preference. |
 
 ---
 
@@ -97,3 +102,4 @@ python native/tools/native.py check screenshot-clipboard
 
 This project is licensed under the [MIT License](LICENSE) — see the LICENSE file for details.
 All custom mod code is independently developed by `maliferen`.
+
