@@ -58,7 +58,7 @@ pub fn set_clipboard_data(dib_data: &[u8], png_data: Option<&[u8]>) -> Result<()
         return Err("empty DIB data".into());
     }
 
-    let png_format = unsafe { RegisterClipboardFormatA(c"PNG".as_ptr().cast::<u8>()) };
+    let png_format = unsafe { RegisterClipboardFormatA(b"PNG\0".as_ptr()) };
 
     let h_dib = unsafe { allocate_global_copy(dib_data)? };
     let h_png = if let Some(png) = png_data {
@@ -104,12 +104,12 @@ pub fn set_clipboard_data(dib_data: &[u8], png_data: Option<&[u8]>) -> Result<()
         }
 
         // Set "PNG" if available and registered
-        if png_format != 0
-            && let Some(h) = h_png
-        {
-            let set_png = SetClipboardData(png_format, h);
-            if set_png.is_null() {
-                GlobalFree(h);
+        if png_format != 0 {
+            if let Some(h) = h_png {
+                let set_png = SetClipboardData(png_format, h);
+                if set_png.is_null() {
+                    GlobalFree(h);
+                }
             }
         }
 
