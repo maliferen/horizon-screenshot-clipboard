@@ -1,0 +1,18 @@
+[package]
+name = "horizon-mod-screenshot-clipboard"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Screenshot Clipboard for Horizon Minecraft: automatically copies F2 screenshots to system clipboard."
+
+[lib]
+path = "mixins/screenshot_clipboard/runtime.rs"
+
+[features]
+default = ["standalone"]
+standalone = []
+
+[dependencies]
+png = "0.18"
+log = "0.4"

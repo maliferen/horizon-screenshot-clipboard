@@ -1,0 +1,74 @@
+name: Release Horizon Native Mod
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test-and-verify:
+    name: Test & Verify Native Mod
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+          components: rustfmt, clippy
+
+      - name: Run unit tests
+        run: cargo test --verbose
+
+      - name: Check code formatting (all files)
+        run: |
+          cargo fmt --check
+          find mixins -name "*.rs" -exec rustfmt --check {} +
+
+      - name: Run clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Package .hnmod bundle
+        run: python package.py --out dist
+
+      - name: Calculate SHA-256
+        id: hash
+        run: |
+          sha=$(sha256sum dist/*.hnmod | awk '{print $1}')
+          echo "SHA256: $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Install Horizon build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev pkg-config
+
+      - name: Verify full native mod against Horizon engine (native.py check)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git clone --depth 1 https://github.com/horizon-rust/horizon-mods.git /tmp/horizon-mods
+          mkdir -p /tmp/horizon-mods/native/screenshot-clipboard
+          cp -r compatibility.json mixins LICENSE /tmp/horizon-mods/native/screenshot-clipboard/
+          python3 /tmp/horizon-mods/native/tools/native.py check screenshot-clipboard --horizon latest
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.hnmod
+          generate_release_notes: true
+          draft: false
+          prerelease: false
