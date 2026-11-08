@@ -22,11 +22,26 @@ static LATEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Toast display duration in milliseconds (3.0 seconds).
 pub const TOAST_DURATION_MS: u64 = 3000;
-/// Toast fade-out duration in milliseconds (0.5 seconds).
+/// Time while progress bar fills from 0% to 100% (2.5 seconds).
+pub const TOAST_FILL_MS: u64 = 2500;
+/// Toast fade-out duration after fill completes (0.5 seconds).
 pub const TOAST_FADE_MS: u64 = 500;
 
 /// Timestamp in milliseconds when the active toast expires.
 static TOAST_EXPIRY: AtomicU64 = AtomicU64::new(0);
+
+/// Active state of the corner toast banner (defaults to true).
+static TOAST_ENABLED: AtomicBool = AtomicBool::new(true);
+static TOAST_INITIALIZED: AtomicBool = AtomicBool::new(false);
+
+/// Represents the instantaneous visual state of the toast banner.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ToastState {
+    /// Opacity between 0.0 and 1.0.
+    pub alpha: f32,
+    /// Progress bar completion between 0.0 and 1.0.
+    pub progress: f32,
+}
 
 /// Returns current wall-clock timestamp in milliseconds.
 pub fn current_timestamp_ms() -> u64 {
@@ -42,19 +57,25 @@ pub fn trigger_toast() {
     TOAST_EXPIRY.store(now.saturating_add(TOAST_DURATION_MS), Ordering::SeqCst);
 }
 
-/// Computes current toast opacity (alpha between 0.0 and 1.0), or None if expired.
-pub fn toast_alpha() -> Option<f32> {
+/// Computes current toast state (opacity and fill progress), or None if expired.
+pub fn toast_state() -> Option<ToastState> {
     let expiry = TOAST_EXPIRY.load(Ordering::Relaxed);
     let now = current_timestamp_ms();
     if now >= expiry {
         return None;
     }
-    let remaining = expiry.saturating_sub(now);
-    if remaining <= TOAST_FADE_MS {
-        Some((remaining as f32 / TOAST_FADE_MS as f32).clamp(0.0, 1.0))
+    let total_ms = TOAST_DURATION_MS;
+    let remaining_ms = expiry.saturating_sub(now);
+    let elapsed_ms = total_ms.saturating_sub(remaining_ms);
+
+    let progress = (elapsed_ms as f32 / TOAST_FILL_MS as f32).clamp(0.0, 1.0);
+    let alpha = if remaining_ms <= TOAST_FADE_MS {
+        (remaining_ms as f32 / TOAST_FADE_MS as f32).clamp(0.0, 1.0)
     } else {
-        Some(1.0)
-    }
+        1.0
+    };
+
+    Some(ToastState { alpha, progress })
 }
 
 /// Check if mod is enabled, loading default from persistence closure if uninitialized.
@@ -75,12 +96,51 @@ pub fn set_enabled(val: bool) {
     INITIALIZED.store(true, Ordering::SeqCst);
 }
 
-/// Returns formatted button label for in-game options menu.
-pub fn settings_label(enabled: bool) -> String {
-    if enabled {
+/// Check if toast banner is enabled, loading default from persistence closure if uninitialized.
+pub fn is_toast_enabled(read_persisted: impl FnOnce() -> Option<bool>) -> bool {
+    if !TOAST_INITIALIZED.load(Ordering::Relaxed) {
+        let val = read_persisted().unwrap_or(true);
+        TOAST_ENABLED.store(val, Ordering::SeqCst);
+        TOAST_INITIALIZED.store(true, Ordering::SeqCst);
+        val
+    } else {
+        TOAST_ENABLED.load(Ordering::SeqCst)
+    }
+}
+
+/// Set toast banner active state live.
+pub fn set_toast_enabled(val: bool) {
+    TOAST_ENABLED.store(val, Ordering::SeqCst);
+    TOAST_INITIALIZED.store(true, Ordering::SeqCst);
+}
+
+/// Returns localized button label for master toggle.
+pub fn settings_label(enabled: bool, is_ru: bool) -> String {
+    if is_ru {
+        if enabled {
+            "Копирование скриншота: ВКЛ".to_string()
+        } else {
+            "Копирование скриншота: ВЫКЛ".to_string()
+        }
+    } else if enabled {
         "Screenshot Clipboard: ON".to_string()
     } else {
         "Screenshot Clipboard: OFF".to_string()
+    }
+}
+
+/// Returns localized button label for corner toast notification toggle.
+pub fn toast_settings_label(enabled: bool, is_ru: bool) -> String {
+    if is_ru {
+        if enabled {
+            "Уведомление в углу: ВКЛ".to_string()
+        } else {
+            "Уведомление в углу: ВЫКЛ".to_string()
+        }
+    } else if enabled {
+        "Corner Notification: ON".to_string()
+    } else {
+        "Corner Notification: OFF".to_string()
     }
 }
 
@@ -378,7 +438,9 @@ pub fn handle_screenshot_path(path_str: &str) {
     if !ENABLED.load(Ordering::SeqCst) {
         return;
     }
-    trigger_toast();
+    if TOAST_ENABLED.load(Ordering::SeqCst) {
+        trigger_toast();
+    }
     let path = PathBuf::from(path_str);
     let seq = next_seq();
     std::thread::Builder::new()
@@ -411,26 +473,48 @@ mod tests {
     fn test_toast_trigger_and_decay() {
         // Reset expiry
         TOAST_EXPIRY.store(0, Ordering::SeqCst);
-        assert!(toast_alpha().is_none());
+        assert!(toast_state().is_none());
 
         trigger_toast();
-        let alpha = toast_alpha().expect("toast should be active");
-        assert!(alpha > 0.0 && alpha <= 1.0);
+        let state = toast_state().expect("toast should be active");
+        assert!(state.alpha > 0.0 && state.alpha <= 1.0);
+        assert!(state.progress >= 0.0 && state.progress <= 1.0);
 
         // Manually simulate expiration
         TOAST_EXPIRY.store(1, Ordering::SeqCst);
-        assert!(toast_alpha().is_none());
+        assert!(toast_state().is_none());
     }
 
     #[test]
     fn test_settings_toggle() {
         set_enabled(true);
         assert!(is_enabled(|| Some(false)));
-        assert_eq!(settings_label(true), "Screenshot Clipboard: ON");
+        assert_eq!(settings_label(true, false), "Screenshot Clipboard: ON");
+        assert_eq!(settings_label(true, true), "Копирование скриншота: ВКЛ");
 
         set_enabled(false);
         assert!(!is_enabled(|| Some(true)));
-        assert_eq!(settings_label(false), "Screenshot Clipboard: OFF");
+        assert_eq!(settings_label(false, false), "Screenshot Clipboard: OFF");
+        assert_eq!(settings_label(false, true), "Копирование скриншота: ВЫКЛ");
+    }
+
+    #[test]
+    fn test_toast_settings_toggle() {
+        set_toast_enabled(true);
+        assert!(is_toast_enabled(|| Some(false)));
+        assert_eq!(toast_settings_label(true, false), "Corner Notification: ON");
+        assert_eq!(toast_settings_label(true, true), "Уведомление в углу: ВКЛ");
+
+        set_toast_enabled(false);
+        assert!(!is_toast_enabled(|| Some(true)));
+        assert_eq!(
+            toast_settings_label(false, false),
+            "Corner Notification: OFF"
+        );
+        assert_eq!(
+            toast_settings_label(false, true),
+            "Уведомление в углу: ВЫКЛ"
+        );
     }
 
     #[test]

@@ -15,9 +15,10 @@ A high-performance native Horizon mod for **Minecraft 26.3** that automatically 
   - Pressing `F2` (or your configured screenshot key) saves the image to disk as usual and immediately copies the pixel data into the Windows clipboard.
   - Paste directly (`Ctrl+V`) into Discord, Telegram, Slack, MS Paint, Photoshop, browsers, or documents without opening the screenshots folder.
 - **In-Game Pixelated Minecraft Toast Banner:**
-  - Displays a clean pixelated blue/gray banner with text (*"Скриншот сохранён в буфер обмена"* / *"Screenshot saved to clipboard"*) at the bottom of the screen right above the hotbar.
-  - Styled with classic 3D Minecraft bevel highlights, subtle dark border, diamond-cyan accent pip, and drop-shadow text.
-  - Stays visible for 3 seconds with smooth fade-out.
+  - Displays a clean pixelated blue/gray banner with text (*"Скриншот сохранён в буфер обмена"* / *"Screenshot saved to clipboard"*) positioned neatly in the **bottom-right corner** of the screen.
+  - Features an animated **thin green progress timer bar** (`#55FF55`) along the top edge that fills from 0% to 100% over 2.5 seconds, followed by a smooth 0.5-second fade-out.
+  - Styled with classic 3D Minecraft bevel highlights, dark slate border, and diamond-cyan accent pip.
+  - Automatic language detection (Russian / English fallback) based on in-game language settings.
 - **Dual Native Clipboard Formats:**
   - **`CF_DIB` (Device Independent Bitmap):** Universal compatibility with native Windows applications (MS Paint, Office suite, classic image tools).
   - **`"PNG"` Registered Format:** Preferred by modern messengers and browsers (Discord, Telegram, Chrome/Firefox), preserving original quality.
@@ -29,11 +30,12 @@ A high-performance native Horizon mod for **Minecraft 26.3** that automatically 
 - **Full Vanilla Parity:**
   - Screenshots continue to be saved in `.minecraft/screenshots/` with standard naming conventions.
   - In-game chat notifications and clickable file links remain fully functional.
-- **In-Game Configuration (Options → Mods):**
-  - `Screenshot Clipboard: ON / OFF` toggle in the native mod menu.
-  - Choice is automatically persisted across game restarts.
+- **In-Game Configuration (Options → Mods → Screenshot Clipboard):**
+  - **Button 0 (Master Toggle):** `Копирование скриншота: ВКЛ / ВЫКЛ` (`Screenshot Clipboard: ON / OFF`)
+  - **Button 1 (Toast Toggle):** `Уведомление в углу: ВКЛ / ВЫКЛ` (`Corner Notification: ON / OFF`)
+  - Choices are automatically persisted across game restarts.
 - **Clean Fallback:**
-  - Disabling the toggle or removing the `.hnmod` immediately restores pure vanilla behavior with zero residual effects.
+  - Disabling the toggles or removing the `.hnmod` immediately restores pure vanilla behavior with zero residual effects.
 
 ---
 

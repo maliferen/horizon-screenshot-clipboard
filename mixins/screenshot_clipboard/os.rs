@@ -3,11 +3,15 @@
 // Native Win32 clipboard integration for Horizon Minecraft.
 // Interacts with user32.dll and kernel32.dll to set CF_DIB and registered "PNG" data.
 
+#[cfg(target_os = "windows")]
 use std::ffi::c_void;
 
+#[cfg(target_os = "windows")]
 const CF_DIB: u32 = 8;
+#[cfg(target_os = "windows")]
 const GMEM_MOVEABLE: u32 = 0x0002;
 
+#[cfg(target_os = "windows")]
 #[link(name = "user32")]
 unsafe extern "system" {
     fn OpenClipboard(hwnd: *mut c_void) -> i32;
@@ -17,6 +21,7 @@ unsafe extern "system" {
     fn RegisterClipboardFormatA(format_name: *const u8) -> u32;
 }
 
+#[cfg(target_os = "windows")]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GlobalAlloc(flags: u32, bytes: usize) -> *mut c_void;
@@ -25,6 +30,7 @@ unsafe extern "system" {
     fn GlobalFree(h_mem: *mut c_void) -> *mut c_void;
 }
 
+#[cfg(target_os = "windows")]
 unsafe fn allocate_global_copy(data: &[u8]) -> Result<*mut c_void, String> {
     let handle = unsafe { GlobalAlloc(GMEM_MOVEABLE, data.len()) };
     if handle.is_null() {
@@ -46,6 +52,7 @@ unsafe fn allocate_global_copy(data: &[u8]) -> Result<*mut c_void, String> {
 ///
 /// Places both `CF_DIB` (for universal native Windows support like MS Paint, Word, etc.)
 /// and registered `"PNG"` format (for Discord, Telegram, and web browsers).
+#[cfg(target_os = "windows")]
 pub fn set_clipboard_data(dib_data: &[u8], png_data: Option<&[u8]>) -> Result<(), String> {
     if dib_data.is_empty() {
         return Err("empty DIB data".into());
@@ -109,5 +116,11 @@ pub fn set_clipboard_data(dib_data: &[u8], png_data: Option<&[u8]>) -> Result<()
         CloseClipboard();
     }
 
+    Ok(())
+}
+
+/// Non-Windows fallback for headless testing and cross-compilation check.
+#[cfg(not(target_os = "windows"))]
+pub fn set_clipboard_data(_dib_data: &[u8], _png_data: Option<&[u8]>) -> Result<(), String> {
     Ok(())
 }

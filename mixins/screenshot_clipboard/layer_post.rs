@@ -10,7 +10,10 @@ fn screenshot_clipboard_layer_post(
     if !m::is_enabled(|| game.native_setting(m::ID, "enabled").map(|v| v != "false")) {
         return;
     }
-    let Some(alpha) = m::toast_alpha() else {
+    if !m::is_toast_enabled(|| game.native_setting(m::ID, "toast").map(|v| v != "false")) {
+        return;
+    }
+    let Some(state) = m::toast_state() else {
         return;
     };
 
@@ -29,12 +32,14 @@ fn screenshot_clipboard_layer_post(
     let screen_w = batch.width;
     let screen_h = batch.height;
 
-    // Centered horizontally, positioned in the lower area above the hotbar / action bar
-    let x = ((screen_w - box_w) / 2.0).round();
-    let y = (screen_h - 68.0).round();
+    // Positioned in the bottom-right corner with 10px margins
+    let margin_right = 10.0;
+    let margin_bottom = 10.0;
+    let x = (screen_w - box_w - margin_right).round();
+    let y = (screen_h - box_h - margin_bottom).round();
 
     let make_argb = |base_a: u32, rgb: u32| -> u32 {
-        let scaled_a = ((base_a as f32) * alpha).clamp(0.0, 255.0) as u32;
+        let scaled_a = ((base_a as f32) * state.alpha).clamp(0.0, 255.0) as u32;
         (scaled_a << 24) | (rgb & 0x00FFFFFF)
     };
 
@@ -72,14 +77,26 @@ fn screenshot_clipboard_layer_post(
         make_argb(0xE8, 0x1E293B),
     );
 
-    // 5. Left accent pip (2px wide indicator in diamond cyan)
+    // 5. Thin 1px green progress timer bar along the top edge
+    if state.progress > 0.0 {
+        let max_bar_w = box_w - 4.0;
+        let bar_w = (max_bar_w * state.progress).clamp(1.0, max_bar_w);
+        // Vibrant Minecraft Green (0x55FF55)
+        game.native_fill(
+            batch,
+            [x + 2.0, y + 1.0, bar_w, 1.0],
+            make_argb(0xFF, 0x55FF55),
+        );
+    }
+
+    // 6. Left accent pip (2px wide indicator in diamond cyan)
     game.native_fill(
         batch,
         [x + 3.0, y + 3.0, 2.0, box_h - 6.0],
         make_argb(0xFF, 0x38BDF8),
     );
 
-    // 6. Text in Minecraft font with drop shadow
+    // 7. Text in Minecraft font with drop shadow
     let text_x = x + pad_x + 3.0;
     let text_y = y + 4.0;
     game.native_text(batch, text, [text_x, text_y], 0xFFFFFF, true);
