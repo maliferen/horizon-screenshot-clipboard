@@ -3,10 +3,14 @@ fn screenshot_clipboard_layer_post(
     layer: &str,
     batch: &mut crate::hud::HudBatch,
 ) {
+    use horizon_client_render::screenshot_clipboard_runtime as m;
+
+    // Drain and process any completed background clipboard worker events on the main thread
+    m::poll_worker_events();
+
     if layer != "minecraft:chat" {
         return;
     }
-    use horizon_client_render::screenshot_clipboard_runtime as m;
     if !m::is_enabled(|| game.native_setting(m::ID, "enabled").map(|v| v != "false")) {
         return;
     }

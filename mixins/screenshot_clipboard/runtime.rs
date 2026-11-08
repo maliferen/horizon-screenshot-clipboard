@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 pub const ID: &str = "screenshot_clipboard";
 pub const MOD_NAME: &str = "Screenshot Clipboard";
@@ -19,6 +20,9 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Monotonic sequence counter to guarantee that when multiple screenshots
 /// occur rapidly, only the latest successfully completed capture wins in clipboard.
 static LATEST_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Tracks the sequence number of the most recently displayed successful capture toast.
+static LAST_SUCCESS_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Toast display duration in milliseconds (3.0 seconds).
 pub const TOAST_DURATION_MS: u64 = 3000;
@@ -152,6 +156,88 @@ pub fn current_seq() -> u64 {
 /// Next sequence number for an incoming capture.
 pub fn next_seq() -> u64 {
     LATEST_SEQ.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+// ---------------------------------------------------------------------------
+// Worker Events & Main Thread Polling Queue
+// ---------------------------------------------------------------------------
+
+/// Event emitted by the background clipboard worker to the game thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerEvent {
+    Success {
+        seq: u64,
+        width: u32,
+        height: u32,
+        path: PathBuf,
+    },
+    Error {
+        seq: u64,
+        path: PathBuf,
+        error: String,
+    },
+}
+
+static PENDING_EVENTS: Mutex<Vec<WorkerEvent>> = Mutex::new(Vec::new());
+
+/// Posts a completed worker event into the pending thread-safe queue.
+pub fn post_event(event: WorkerEvent) {
+    let mut q = match PENDING_EVENTS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    q.push(event);
+}
+
+/// Drains and processes all pending worker events on the main game thread.
+///
+/// Guaranteed behavior:
+/// - Success toast is triggered ONLY after `SetClipboardData` actually succeeds.
+/// - False success is never shown if copying failed.
+/// - Upon error, logs a detailed warning/error message.
+pub fn poll_worker_events() {
+    let events: Vec<WorkerEvent> = {
+        let mut q = match PENDING_EVENTS.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        q.drain(..).collect()
+    };
+
+    for ev in events {
+        match ev {
+            WorkerEvent::Success {
+                seq,
+                width,
+                height,
+                path,
+            } => {
+                if seq >= LAST_SUCCESS_SEQ.load(Ordering::SeqCst) {
+                    LAST_SUCCESS_SEQ.store(seq, Ordering::SeqCst);
+                    if TOAST_ENABLED.load(Ordering::SeqCst) {
+                        trigger_toast();
+                    }
+                    log::info!(
+                        "Screenshot Clipboard: copied {} to clipboard ({}x{})",
+                        path.display(),
+                        width,
+                        height
+                    );
+                }
+            }
+            WorkerEvent::Error {
+                seq: _,
+                path,
+                error,
+            } => {
+                log::error!(
+                    "Screenshot Clipboard error copying {}: {}",
+                    path.display(),
+                    error
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,20 +465,21 @@ pub fn png_to_dib(png_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 }
 
 // ---------------------------------------------------------------------------
-// Native Windows 10/11 Clipboard Implementation
+// Native OS Backend Integration
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
+#[allow(unexpected_cfgs)]
 mod os_backend {
     pub fn write_image_to_clipboard(dib_data: &[u8], png_data: &[u8]) -> Result<(), String> {
-        #[cfg(not(feature = "standalone"))]
-        {
-            horizon_threads::screenshot_clipboard_os::set_clipboard_data(dib_data, Some(png_data))
-        }
         #[cfg(feature = "standalone")]
         {
             let _ = (dib_data, png_data);
             Ok(())
+        }
+        #[cfg(not(feature = "standalone"))]
+        {
+            horizon_threads::screenshot_clipboard_os::set_clipboard_data(dib_data, Some(png_data))
         }
     }
 }
@@ -433,36 +520,64 @@ pub fn copy_screenshot_to_clipboard(path: &Path, seq: u64) -> Result<(u32, u32),
     Ok((width, height))
 }
 
+// ---------------------------------------------------------------------------
+// Persistent Worker Thread & Asynchronous Dispatch
+// ---------------------------------------------------------------------------
+
+struct WorkerTask {
+    path: PathBuf,
+    seq: u64,
+}
+
+static WORKER_TX: OnceLock<std::sync::mpsc::Sender<WorkerTask>> = OnceLock::new();
+
+fn get_worker_sender() -> &'static std::sync::mpsc::Sender<WorkerTask> {
+    WORKER_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<WorkerTask>();
+        std::thread::Builder::new()
+            .name("sc-clipboard".into())
+            .spawn(move || {
+                while let Ok(task) = rx.recv() {
+                    match copy_screenshot_to_clipboard(&task.path, task.seq) {
+                        Ok((w, h)) => {
+                            post_event(WorkerEvent::Success {
+                                seq: task.seq,
+                                width: w,
+                                height: h,
+                                path: task.path,
+                            });
+                        }
+                        Err(e) => {
+                            post_event(WorkerEvent::Error {
+                                seq: task.seq,
+                                path: task.path,
+                                error: e,
+                            });
+                        }
+                    }
+                }
+            })
+            .expect("failed to spawn persistent clipboard worker thread");
+        tx
+    })
+}
+
 /// Asynchronous trigger invoked when a screenshot file path is received.
+///
+/// Dispatches file to background worker thread. Does NOT trigger success toast
+/// until `SetClipboardData` actually succeeds.
 pub fn handle_screenshot_path(path_str: &str) {
     if !ENABLED.load(Ordering::SeqCst) {
         return;
     }
-    if TOAST_ENABLED.load(Ordering::SeqCst) {
-        trigger_toast();
-    }
     let path = PathBuf::from(path_str);
     let seq = next_seq();
-    std::thread::Builder::new()
-        .name("sc-clipboard".into())
-        .spawn(move || match copy_screenshot_to_clipboard(&path, seq) {
-            Ok((w, h)) => {
-                log::info!(
-                    "Screenshot Clipboard: copied {} to clipboard ({}x{})",
-                    path.display(),
-                    w,
-                    h
-                );
-            }
-            Err(e) => {
-                log::warn!("Screenshot Clipboard error: {e}");
-            }
-        })
-        .ok();
+    let tx = get_worker_sender();
+    let _ = tx.send(WorkerTask { path, seq });
 }
 
 // ---------------------------------------------------------------------------
-// Unit Tests
+// Unit & Integration Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -546,9 +661,6 @@ mod tests {
 
     #[test]
     fn test_rgba_to_bottom_up_dib_channels_and_orientation() {
-        // 2x2 image:
-        // Top row (row 0): Red (255, 0, 0, 255), Green (0, 255, 0, 255)
-        // Bottom row (row 1): Blue (0, 0, 255, 255), White (255, 255, 255, 255)
         let rgba = vec![
             255, 0, 0, 255, // (0,0) Red
             0, 255, 0, 255, // (1,0) Green
@@ -559,21 +671,15 @@ mod tests {
         let dib = rgba_to_bottom_up_dib(&rgba, 2, 2).expect("DIB conversion");
         assert_eq!(dib.len(), 40 + 2 * 2 * 4);
 
-        // Header check
         let header = BitmapInfoHeader::from_bytes(&dib).expect("valid header");
         assert_eq!(header.bi_width, 2);
         assert_eq!(header.bi_height, 2);
 
-        // Pixels start at byte 40.
-        // Row 0 of DIB must be bottom row of image (row 1: Blue, White):
         let pixels = &dib[40..];
-
         // Pixel (0,0) in DIB (Blue): B=255, G=0, R=0, A=255
         assert_eq!(&pixels[0..4], &[255, 0, 0, 255]);
         // Pixel (1,0) in DIB (White): B=255, G=255, R=255, A=255
         assert_eq!(&pixels[4..8], &[255, 255, 255, 255]);
-
-        // Row 1 of DIB must be top row of image (row 0: Red, Green):
         // Pixel (0,1) in DIB (Red): B=0, G=0, R=255, A=255
         assert_eq!(&pixels[8..12], &[0, 0, 255, 255]);
         // Pixel (1,1) in DIB (Green): B=0, G=255, R=0, A=255
@@ -587,24 +693,21 @@ mod tests {
             0, 255, 0, // Green
         ];
         let dib = rgb_to_bottom_up_dib(&rgb, 2, 1).expect("RGB to DIB");
-        assert_eq!(dib.len(), 40 + 2 * 1 * 4);
+        assert_eq!(dib.len(), 40 + 2 * 4);
         let pixels = &dib[40..];
-        // Red in BGRA: B=0, G=0, R=255, A=255
         assert_eq!(&pixels[0..4], &[0, 0, 255, 255]);
-        // Green in BGRA: B=0, G=255, R=0, A=255
         assert_eq!(&pixels[4..8], &[0, 255, 0, 255]);
     }
 
     #[test]
     fn test_empty_or_truncated_buffer_fails() {
         assert!(rgba_to_bottom_up_dib(&[], 2, 2).is_err());
-        assert!(rgba_to_bottom_up_dib(&[255; 15], 2, 2).is_err()); // Needs 16 bytes
-        assert!(rgb_to_bottom_up_dib(&[255; 5], 2, 1).is_err()); // Needs 6 bytes
+        assert!(rgba_to_bottom_up_dib(&[255; 15], 2, 2).is_err());
+        assert!(rgb_to_bottom_up_dib(&[255; 5], 2, 1).is_err());
     }
 
     #[test]
     fn test_large_resolution_dimensions() {
-        // 8K UHD: 7680 x 4320
         let h = BitmapInfoHeader::new(7680, 4320).expect("8K UHD header");
         assert_eq!(h.bi_width, 7680);
         assert_eq!(h.bi_height, 4320);
@@ -650,8 +753,49 @@ mod tests {
 
         assert!(seq1 < seq2);
         assert!(seq2 < seq3);
-
-        // An earlier task with seq1 will see current_seq() >= seq3 and bail out safely
         assert!(seq1 < current_seq());
+    }
+
+    #[test]
+    fn test_worker_event_error_does_not_trigger_toast() {
+        TOAST_EXPIRY.store(0, Ordering::SeqCst);
+        assert!(toast_state().is_none());
+
+        // Post an error event
+        post_event(WorkerEvent::Error {
+            seq: next_seq(),
+            path: PathBuf::from("corrupted.png"),
+            error: "Decode failure".into(),
+        });
+
+        // Drain events on game thread
+        poll_worker_events();
+
+        // Toast must NOT be shown!
+        assert!(
+            toast_state().is_none(),
+            "Error event must never trigger success toast"
+        );
+    }
+
+    #[test]
+    fn test_worker_event_success_triggers_toast() {
+        TOAST_EXPIRY.store(0, Ordering::SeqCst);
+        set_toast_enabled(true);
+        assert!(toast_state().is_none());
+
+        let seq = next_seq();
+        post_event(WorkerEvent::Success {
+            seq,
+            width: 1920,
+            height: 1080,
+            path: PathBuf::from("screenshot.png"),
+        });
+
+        poll_worker_events();
+
+        // Toast must be active after success
+        let state = toast_state().expect("Toast should be active after successful event");
+        assert!(state.alpha > 0.0);
     }
 }
